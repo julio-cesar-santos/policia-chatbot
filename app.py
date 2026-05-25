@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 import requests
 from flask import Flask, request, jsonify
 
+# Carrega as chaves do arquivo .env
 load_dotenv()
 
 app = Flask(__name__)

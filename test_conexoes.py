@@ -2,14 +2,19 @@ import pytest
 import requests
 import concurrent.futures
 import time
+import os
+from dotenv import load_dotenv
+
+# Carrega as chaves do arquivo .env
+load_dotenv()
 
 # Configuracoes base
 WAHA_BASE_URL = "http://localhost:3000"
-WAHA_API_KEY = "delegacia50"
-TYPEBOT_PUBLIC_ID = "delegacia-5-0-x0qqp0z"
+WAHA_API_KEY = os.getenv("WAHA_API_KEY")
+TYPEBOT_PUBLIC_ID = os.getenv("TYPEBOT_PUBLIC_ID")
 TYPEBOT_API_URL = f"https://typebot.io/api/v1/typebots/{TYPEBOT_PUBLIC_ID}/startChat"
 FLASK_WEBHOOK_URL = "http://localhost:5000/webhook"
-NUMERO_AUTORIZADO = "39355339014152@lid"
+NUMERO_AUTORIZADO = os.getenv("NUMERO_AUTORIZADO")
 
 def test_conexao_typebot():
     """
