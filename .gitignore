@@ -1,0 +1,28 @@
+# Ambientes Virtuais (se você usa venv)
+venv/
+env/
+.venv/
+
+# Arquivos de Cache do Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Cache e logs do Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Variáveis de Ambiente e Segredos (CRÍTICO)
+.env
+.env.local
+.env.*
+
+# Configurações de IDEs (VS Code, IntelliJ, etc)
+.vscode/
+.idea/
+*.swp
+
+# Arquivos de sistema operacional (opcional, mas recomendado)
+.DS_Store
+Thumbs.db
