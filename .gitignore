@@ -26,3 +26,6 @@ htmlcov/
 # Arquivos de sistema operacional (opcional, mas recomendado)
 .DS_Store
 Thumbs.db
+
+# Ignorar a pasta clonada do Supabase (ela já tem o próprio repositório)
+supabase/

@@ -1,0 +1,7 @@
+services:
+  waha:
+    image: devlikeapro/waha
+    container_name: waha_delegacia
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
