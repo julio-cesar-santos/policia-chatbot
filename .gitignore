@@ -16,7 +16,6 @@ htmlcov/
 # Variáveis de Ambiente e Segredos (CRÍTICO)
 .env
 .env.local
-.env.*
 
 # Configurações de IDEs (VS Code, IntelliJ, etc)
 .vscode/
