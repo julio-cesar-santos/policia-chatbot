@@ -1,118 +1,69 @@
 ```markdown
-# Delegacia 5.0 - Assistente Virtual da PCPE
+# 🚓 Polícia Civil PE - Delegacia 5.0 (Triagem IA)
 
-## Introdução
-O **Delegacia 5.0** é um sistema de triagem automatizada via WhatsApp desenvolvido para modernizar o atendimento da Polícia Civil de Pernambuco (PCPE). Utiliza Inteligência Artificial (Llama 3.1) e fluxos de decisão (Typebot) para orientar os cidadãos de forma oficial e segura. 
+Sistema de orquestração de chatbot para o WhatsApp da Polícia Civil de Pernambuco, focado na triagem inteligente de cidadãos, encaminhamento para Boletim de Ocorrência Online e busca indexada de delegacias físicas.
 
-Principais funcionalidades:
-* Triagem e direcionamento de Boletins de Ocorrência (Online vs. Presencial).
-* Consulta de endereços físicos das 183 delegacias do estado usando banco de dados próprio (Supabase).
-* Detecção de emergências graves com transferência invisível e imediata para o plantão policial.
-
----
-
-## Requisitos do Sistema
-Para rodar este projeto na sua máquina, você precisará de:
-* [Docker](https://www.docker.com/) e Docker Compose
-* [Python 3.10+](https://www.python.org/)
-* Conta ativa no [Typebot](https://typebot.io/) (com o fluxo JSON do projeto importado)
+## 📖 Índice de Documentação
+Para aprofundar-se na engenharia deste projeto, consulte nossa documentação técnica na pasta `/docs`:
+* [Arquitetura e C4 Model](docs/ARCHITECTURE.md)
+* [Documentação da API](docs/API.md)
+* [Model Card da Inteligência Artificial](docs/MODEL_CARD.md)
+* [Segurança e Compliance](docs/SECURITY.md)
 
 ---
 
-## Instalação e Configuração
+## ⚙️ Runbook (Guia de Execução)
 
-**1. Clone o repositório:**
-```bash
-git clone [https://projeto-integrador1@dev.azure.com/projeto-integrador1/projeto-integrador/_git/projeto-integrador]
-cd projeto_integrador
+### Pré-requisitos
+* Docker e Docker Compose instalados.
+* Python 3.10+.
+* Chaves de API do Groq e Supabase.
+
+### Variáveis de Ambiente (`.env`)
+Crie um arquivo `.env` na raiz do projeto com o seguinte formato:
+```env
+# Segurança WAHA
+WAHA_API_KEY=sua_chave_secreta_aqui
+
+# Integrações
+GROQ_API_KEY=gsk_suachave
+SUPABASE_URL=[https://seusupabase.supabase.co](https://seusupabase.supabase.co)
+SUPABASE_KEY=sua_chave_service_role_ou_anon
+
+# Autorização (Deixe vazio para produção ou defina um número para testes)
+NUMERO_AUTORIZADO=5581999999999@c.us
 
 ```
 
-**2. Configuração das Variáveis de Ambiente:**
-Faça uma cópia do arquivo de modelo e preencha com as suas credenciais reais (API do WAHA, chave do Supabase, ID do Typebot, etc). O arquivo `.env` está protegido e não subirá para o repositório.
+### Configuração do Banco de Dados (Supabase)
 
-```bash
-cp .env.example .env
+Para garantir buscas na casa dos milissegundos (< 5ms), execute este script SQL no painel do Supabase para criar o índice de Trigramas:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX idx_delegacias_endereco_trgm ON delegacias USING GIN (endereco gin_trgm_ops);
 
 ```
 
-**3. Instalação do Backend Python:**
-Crie um ambiente virtual e instale as dependências necessárias:
+### Subindo a Aplicação
 
+1. Inicie a infraestrutura do WhatsApp (WAHA):
 ```bash
-python3 -m venv venv
-source venv/bin/activate
+docker-compose up -d
+
+```
+
+
+2. Prepare o ambiente e inicie o Orquestrador Python:
+```bash
+python -m venv .venv
+source .venv/bin/activate  # No Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-
-```
-
----
-
-## Executando o Projeto
-
-A arquitetura do sistema é dividida em três frentes principais que precisam estar ativas simultaneamente:
-
-**1. Banco de Dados (Supabase Local):**
-*(Nota: Certifique-se de ter a pasta oficial do Supabase Docker clonada no seu sistema).*
-Vá até o diretório do Supabase e inicie os contêineres:
-
-```bash
-cd caminho/para/supabase/docker
-docker compose up -d
-
-```
-
-**2. Motor do WhatsApp (WAHA):**
-Na raiz do nosso repositório, suba o contêiner do WhatsApp:
-
-```bash
-docker compose up -d
-
-```
-
-**3. Servidor de Roteamento (Flask):**
-Com os contêineres no ar, inicie o backend em Python que faz a ponte de comunicação:
-
-```bash
-python3 app.py
-
-```
-
----
-
-## Testes Automatizados
-
-O projeto conta com uma suíte rigorosa de testes utilizando o `pytest` para garantir a estabilidade do roteamento, a segurança do Webhook contra acessos indevidos e a integridade da busca no banco de dados.
-
-Os testes estão categorizados dentro da pasta `tests/`.
-
-* **Rodar todos os testes de uma vez:**
-```bash
-pytest
+python app.py
 
 ```
 
 
-* **Rodar testes específicos por módulo:**
-```bash
-# Testar apenas a lógica, menus e tolerância a erros do Typebot
-pytest tests/test_typebot.py
-
-# Testar defesas do servidor Flask contra tráfego malicioso e payloads inválidos
-pytest tests/test_webhook.py
-
-# Testar conexão com Supabase e precisão da busca de endereços
-pytest tests/test_database.py
-
-# Verificar a saúde das integrações (Latência e status do WAHA/Typebot)
-pytest tests/test_integracoes.py
-
-```
-
-
-
-*Aviso: Certifique-se de que o seu arquivo `.env` está devidamente preenchido antes de rodar os testes, pois os scripts realizam consultas reais à sua infraestrutura local.*
-
-```
+3. Acesse `http://localhost:3000/dashboard`, gere o QR Code e conecte o WhatsApp.
 
 ```
