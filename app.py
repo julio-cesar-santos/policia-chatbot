@@ -1,242 +1,285 @@
 import os
 import requests
+from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify
-from bot_logic import processar_ia, buscar_delegacias
+
+from fastapi import FastAPI, BackgroundTasks, Depends, status, Request
+from pydantic import BaseModel, Field, ConfigDict
+
+from bot_logic import (
+    ServicoTriagemIA,
+    DelegaciaRepository,
+    IAIntegrationError,
+    DatabaseIntegrationError
+)
 
 load_dotenv()
 
-app = Flask(__name__)
+app = FastAPI(
+    title="Polícia Civil PE - Delegacia 5.0 API",
+    description="Core Orquestrador de Triagem Inteligente via WhatsApp (DDD / Arquitetura Hexagonal)",
+    version="2.0.0"
+)
 
-sessoes = {}
+@app.post("/webhook-debug")
+async def debug_webhook(request: Request):
+    corpo = await request.json()
+    print(f"DEBUG CRU: {corpo}")
+    return {"status": "recebido"}
 
-WAHA_URL = "http://localhost:3000/api/sendText"
-WAHA_API_KEY = os.getenv("WAHA_API_KEY", "").strip()
+sessoes: Dict[str, Dict[str, Any]] = {}
 NUMERO_AUTORIZADO = os.getenv("NUMERO_AUTORIZADO", "").strip()
 
-def enviar_waha(chat_id, texto):
-    """Envia a mensagem de volta para o WhatsApp via WAHA."""
-    payload = {"chatId": chat_id, "text": texto, "session": "default"}
-    headers = {
-        "Content-Type": "application/json",
-        "X-Api-Key": WAHA_API_KEY 
-    }
-    try:
-        resposta = requests.post(WAHA_URL, json=payload, headers=headers)
-        print(f"-> Tentativa de envio para: {chat_id} | Status: {resposta.status_code}")
-    except Exception as e:
-        print(f"Erro crítico de conexão com o WAHA: {e}")
+class WahaPayloadDTO(BaseModel):
+    remetente: str = Field(..., alias="from")
+    corpo: str = Field(default="", alias="body")
+    tipo: Optional[str] = Field(default="text", alias="type")
 
-def enviar_menu_principal(chat_id):
-    """Reinicia o estado e envia as opções iniciais."""
-    sessoes[chat_id]['estado'] = 'menu'
+    model_config = ConfigDict(populate_by_name=True)
+
+    @property
+    def texto_limpo(self) -> str:
+        return self.corpo.strip()
+
+
+class WebhookEventDTO(BaseModel):
+    event: str
+    payload: WahaPayloadDTO
+
+class WahaOutboundAdapter:
     
-    enviar_waha(chat_id, "Olá! Sou o assistente da *Polícia Civil de Pernambuco*. Como posso ajudar você hoje?")
-    
-    texto_opcoes = (
-        "Digite o número da opção desejada:\n"
-        "1 - Registrar B.O. Online\n"
-        "2 - Delegacias Próximas\n"
-        "3 - Denúncia Anônima\n"
-        "4 - Acompanhar B.O.\n"
-        "5 - Informações de licenciamento\n"
-        "6 - Falar com Atendente\n\n"
-        "Ou digite diretamente o seu problema abaixo."
-    )
-    enviar_waha(chat_id, texto_opcoes)
-    enviar_waha(chat_id, 'Para voltar ao menu, digite "Menu" ou "Voltar".')
+    def __init__(self):
+        self.url = "http://localhost:3000/api/sendText"
+        self.api_key = os.getenv("WAHA_API_KEY", "").strip()
 
-def apresentar_resultado_delegacia(chat_id, alternativa=False):
-    indice = sessoes[chat_id].get('indice_busca', 0)
-    resultados = sessoes[chat_id].get('resultados_busca', [])
-    
-    if indice < len(resultados):
-        delegacia = resultados[indice]
-        nome = delegacia.get('descricao', 'Delegacia da Polícia Civil')
-        endereco = delegacia.get('endereco', 'Endereço não cadastrado')
-        telefone = delegacia.get('telefones', 'Telefone não disponível')
-        
-        intro = "Aqui está outra opção próxima:\n\n" if alternativa else "A delegacia mais próxima seria:\n\n"
-        texto_resultado = f"{intro}*{nome}*\n\nEndereço: {endereco}\n\nContato: {telefone}"
-        
-        enviar_waha(chat_id, texto_resultado)
-        enviar_waha(chat_id, "Esse resultado foi útil?\n1 - Sim\n2 - Não")
-    else:
-        enviar_waha(chat_id, "Não encontrei mais delegacias para essa localidade no sistema.\n\nDeseja digitar sua localidade novamente?\n1 - Sim\n2 - Não")
-        sessoes[chat_id]['estado'] = 'refazer_busca'
+    def enviar(self, chat_id: str, texto: str) -> None:
+        payload = {"chatId": chat_id, "text": texto, "session": "default"}
+        headers = {"Content-Type": "application/json", "X-Api-Key": self.api_key}
+        try:
+            res = requests.post(self.url, json=payload, headers=headers, timeout=5)
+            print(f"[WAHA OUT] -> Alvo: {chat_id} | HTTP: {res.status_code}")
+        except Exception as exc:
+            print(f"[ERRO CRÍTICO INFRA] Falha ao contactar WAHA: {exc}")
 
-def lidar_com_menu_principal(chat_id, mensagem):
-    msg_limpa = str(mensagem).strip().lower()
-    texto_voltar = 'Para voltar ao menu, digite "Menu" ou "Voltar".'
+class OrquestradorDeTriagem:
+    def __init__(
+        self,
+        waha: WahaOutboundAdapter,
+        repo: DelegaciaRepository,
+        ia: ServicoTriagemIA
+    ):
+        self.waha = waha
+        self.repo = repo
+        self.ia = ia
+        self.msg_voltar = 'Para voltar ao menu, digite "Menu" ou "Voltar".'
 
-    if msg_limpa == "1":
-        texto = (
-            "O boletim de ocorrência online pode ser feito pelo portal oficial da Secretaria de Defesa Social.\n\n"
-            "⚠️ *Atenção:* Ele é válido apenas para furtos, perda de documentos, acidentes de trânsito sem vítimas e crimes cibernéticos. Casos de violência física, roubo com arma de fogo ou furto de veículos exigem ida à delegacia física.\n\n"
-            "Acesse o link para registrar: http://servicos.sds.pe.gov.br/delegacia/"
-        )
-        enviar_waha(chat_id, texto)
-        enviar_waha(chat_id, texto_voltar)
+    def executar_ciclo(self, chat_id: str, mensagem: str) -> None:
+        if chat_id not in sessoes:
+            sessoes[chat_id] = {'estado': 'novo', 'historico': []}
+            self._enviar_menu_principal(chat_id)
+            return
+
+        estado_atual = sessoes[chat_id]['estado']
+
+        if estado_atual in ['menu', 'novo', 'bo_online']:
+            self._lidar_menu(chat_id, mensagem)
+        elif estado_atual == 'busca_delegacias':
+            self._lidar_busca(chat_id, mensagem)
+        elif estado_atual == 'feedback_busca':
+            self._lidar_feedback(chat_id, mensagem)
+        elif estado_atual == 'pos_feedback':
+            self._lidar_pos_feedback(chat_id, mensagem)
+        elif estado_atual == 'refazer_busca':
+            self._lidar_refazer(chat_id, mensagem)
+        elif estado_atual == 'atendimento_humano':
+            self._lidar_humano(chat_id, mensagem)
+
+    def _enviar_menu_principal(self, chat_id: str) -> None:
         sessoes[chat_id]['estado'] = 'menu'
-        
-    elif msg_limpa == "2":
-        sessoes[chat_id]['estado'] = 'busca_delegacias'
-        texto = "Por favor, me informe o seu bairro e a sua cidade para que eu possa localizar a delegacia mais próxima no meu sistema. Mande exatamente: \"BAIRRO, CIDADE\""
-        enviar_waha(chat_id, texto)
-        enviar_waha(chat_id, texto_voltar)
-        
-    elif msg_limpa == "3":
-        texto = (
-            "Para fazer uma denúncia anônima com total sigilo, você pode ligar gratuitamente para o número *181 (Disque Denúncia)*.\n\n"
-            "Se preferir, você também pode digitar os detalhes da denúncia aqui mesmo no chat e eu farei o registro inicial."
+        self.waha.enviar(chat_id, "Olá! Sou o assistente da *Polícia Civil de Pernambuco*. Como posso ajudar você hoje?")
+        texto_opcoes = (
+            "Digite o número da opção desejada:\n"
+            "1 - Registrar B.O. Online\n"
+            "2 - Delegacias Próximas\n"
+            "3 - Denúncia Anônima\n"
+            "4 - Acompanhar B.O.\n"
+            "5 - Informações de licenciamento\n"
+            "6 - Falar com Atendente\n\n"
+            "Ou digite diretamente o seu problema abaixo."
         )
-        enviar_waha(chat_id, texto)
-        enviar_waha(chat_id, texto_voltar)
-        sessoes[chat_id]['estado'] = 'menu' 
+        self.waha.enviar(chat_id, texto_opcoes)
+        self.waha.enviar(chat_id, self.msg_voltar)
 
-    elif msg_limpa == "4":
-        texto = (
-            "O acompanhamento do seu Boletim de Ocorrência deve ser feito exclusivamente no site oficial da Polícia Civil de Pernambuco, utilizando o número de protocolo gerado no momento do seu registro.\n\n"
-            "Acesse: https://delegaciapelainternet.pc.pe.gov.br/delegacia/emissaoBo"
-        )
-        enviar_waha(chat_id, texto)
-        enviar_waha(chat_id, texto_voltar)
-        sessoes[chat_id]['estado'] = 'menu'
-
-    elif msg_limpa == "5":
-        texto = (
-            "A Lei 7550/77 trata das taxas de fiscalização e licenciamento policial (necessárias para alvarás de eventos, shows, segurança privada, etc.).\n\n"
-            "Para prosseguir, o cidadão deve emitir o DAE (Documento de Arrecadação Estadual) através do portal de serviços da PCPE."
-        )
-        enviar_waha(chat_id, texto)
-        enviar_waha(chat_id, texto_voltar)
-        sessoes[chat_id]['estado'] = 'menu'
-
-    elif msg_limpa == "6":
-        sessoes[chat_id]['estado'] = 'atendimento_humano'
-        texto = "Compreendo. Por questões de segurança ou complexidade, estou transferindo o seu atendimento para o plantão policial. Por favor, aguarde um instante na linha."
-        enviar_waha(chat_id, texto)
-        enviar_waha(chat_id, "_(Para cancelar a transferência e voltar ao menu principal, digite \"Menu\")_")
+    def _apresentar_delegacia(self, chat_id: str, alternativa: bool = False) -> None:
+        indice = sessoes[chat_id].get('indice_busca', 0)
+        resultados = sessoes[chat_id].get('resultados_busca', [])
         
-    elif msg_limpa in ["voltar", "menu"]:
-        enviar_menu_principal(chat_id)
-        
-    else:
-        resposta_ia = processar_ia(chat_id, mensagem)
-        
-        if "[TRANSBORDO]" in resposta_ia:
-             texto_transbordo = "Compreendo. Por questões de segurança ou complexidade, estou transferindo o seu atendimento para o plantão policial. Por favor, aguarde um instante na linha."
-             enviar_waha(chat_id, texto_transbordo)
-             enviar_waha(chat_id, "_(Para cancelar a transferência e voltar ao menu principal, digite \"Menu\")_")
-             sessoes[chat_id]['estado'] = 'atendimento_humano'
+        if indice < len(resultados):
+            delegacia = resultados[indice]
+            nome = delegacia.get('descricao', 'Delegacia da Polícia Civil')
+            endereco = delegacia.get('endereco', 'Endereço não cadastrado')
+            telefone = delegacia.get('telefones', 'Telefone não disponível')
+            
+            intro = "Aqui está outra opção próxima:\n\n" if alternativa else "A delegacia mais próxima seria:\n\n"
+            self.waha.enviar(chat_id, f"{intro}*{nome}*\n\nEndereço: {endereco}\n\nContato: {telefone}")
+            self.waha.enviar(chat_id, "Esse resultado foi útil?\n1 - Sim\n2 - Não")
         else:
-             enviar_waha(chat_id, resposta_ia)
-             enviar_waha(chat_id, texto_voltar)
+            self.waha.enviar(chat_id, "Não encontrei mais delegacias para essa localidade no sistema.\n\nDeseja digitar sua localidade novamente?\n1 - Sim\n2 - Não")
+            sessoes[chat_id]['estado'] = 'refazer_busca'
 
-def lidar_com_busca_delegacias(chat_id, mensagem):
-    if mensagem.lower() in ["voltar", "menu"]:
-        enviar_menu_principal(chat_id)
-        return
+    def _lidar_menu(self, chat_id: str, mensagem: str) -> None:
+        msg_lower = mensagem.lower()
 
-    dados_banco = buscar_delegacias(mensagem)
+        if msg_lower == "1":
+            texto = (
+                "O boletim de ocorrência online pode ser feito pelo portal oficial da Secretaria de Defesa Social.\n\n"
+                "⚠️ *Atenção:* Ele é válido apenas para furtos, perda de documentos, acidentes de trânsito sem vítimas e crimes cibernéticos. Casos de violência física, roubo com arma de fogo ou furto de veículos exigem ida à delegacia física.\n\n"
+                "Acesse o link para registrar: http://servicos.sds.pe.gov.br/delegacia/"
+            )
+            self.waha.enviar(chat_id, texto)
+            self.waha.enviar(chat_id, self.msg_voltar)
+            sessoes[chat_id]['estado'] = 'menu'
+            
+        elif msg_lower == "2":
+            sessoes[chat_id]['estado'] = 'busca_delegacias'
+            self.waha.enviar(chat_id, "Por favor, me informe o seu bairro e a sua cidade para que eu possa localizar a delegacia mais próxima no meu sistema. Mande exatamente: \"BAIRRO, CIDADE\"")
+            self.waha.enviar(chat_id, self.msg_voltar)
+            
+        elif msg_lower == "3":
+            texto = (
+                "Para fazer uma denúncia anônima com total sigilo, você pode ligar gratuitamente para o número *181 (Disque Denúncia)*.\n\n"
+                "Se preferir, você também pode digitar os detalhes da denúncia aqui mesmo no chat e eu farei o registro inicial."
+            )
+            self.waha.enviar(chat_id, texto)
+            self.waha.enviar(chat_id, self.msg_voltar)
+            sessoes[chat_id]['estado'] = 'menu' 
+
+        elif msg_lower == "4":
+            texto = (
+                "O acompanhamento do seu Boletim de Ocorrência deve ser feito exclusivamente no site oficial da Polícia Civil de Pernambuco, utilizando o número de protocolo gerado no momento do seu registro.\n\n"
+                "Acesse: https://delegaciapelainternet.pc.pe.gov.br/delegacia/emissaoBo"
+            )
+            self.waha.enviar(chat_id, texto)
+            self.waha.enviar(chat_id, self.msg_voltar)
+            sessoes[chat_id]['estado'] = 'menu'
+
+        elif msg_lower == "5":
+            texto = (
+                "A Lei 7550/77 trata das taxas de fiscalização e licenciamento policial (necessárias para alvarás de eventos, shows, segurança privada, etc.).\n\n"
+                "Para prosseguir, o cidadão deve emitir o DAE (Documento de Arrecadação Estadual) através do portal de serviços da PCPE."
+            )
+            self.waha.enviar(chat_id, texto)
+            self.waha.enviar(chat_id, self.msg_voltar)
+            sessoes[chat_id]['estado'] = 'menu'
+
+        elif msg_lower == "6":
+            sessoes[chat_id]['estado'] = 'atendimento_humano'
+            self.waha.enviar(chat_id, "Compreendo. Por questões de segurança ou complexidade, estou transferindo o seu atendimento para o plantão policial. Por favor, aguarde um instante na linha.")
+            self.waha.enviar(chat_id, "_(Para cancelar a transferência e voltar ao menu principal, digite \"Menu\")_")
+            
+        elif msg_lower in ["voltar", "menu"]:
+            self._enviar_menu_principal(chat_id)
+            
+        else:
+            try:
+                resposta_ia = self.ia.analisar_relato(mensagem)
+                if "[TRANSBORDO]" in resposta_ia:
+                    self.waha.enviar(chat_id, "Compreendo. Por questões de segurança ou complexidade, estou transferindo o seu atendimento para o plantão policial. Por favor, aguarde um instante na linha.")
+                    self.waha.enviar(chat_id, "_(Para cancelar a transferência e voltar ao menu principal, digite \"Menu\")_")
+                    sessoes[chat_id]['estado'] = 'atendimento_humano'
+                else:
+                    self.waha.enviar(chat_id, resposta_ia)
+                    self.waha.enviar(chat_id, self.msg_voltar)
+            except IAIntegrationError as erro:
+                print(f"[FALHA LLM] {erro}")
+                self.waha.enviar(chat_id, "Desculpe, estou a enfrentar instabilidades técnicas no momento. Tente novamente em alguns minutos.")
+
+    def _lidar_busca(self, chat_id: str, mensagem: str) -> None:
+        if mensagem.lower() in ["voltar", "menu"]:
+            self._enviar_menu_principal(chat_id)
+            return
+
+        try:
+            dados_banco = self.repo.buscar_por_localidade(mensagem)
+            if not dados_banco:
+                self.waha.enviar(chat_id, "Nenhum resultado encontrado. Deseja digitar sua localidade novamente?\n1 - Sim\n2 - Não")
+                sessoes[chat_id]['estado'] = 'refazer_busca'
+            else:
+                resultados_unicos = []
+                vistos = set()
+                for d in dados_banco:
+                    end = d.get('endereco', '').strip().lower()
+                    if end not in vistos:
+                        vistos.add(end)
+                        resultados_unicos.append(d)
+
+                sessoes[chat_id]['resultados_busca'] = resultados_unicos
+                sessoes[chat_id]['indice_busca'] = 0
+                sessoes[chat_id]['estado'] = 'feedback_busca'
+                self._apresentar_delegacia(chat_id)
+        except DatabaseIntegrationError as exc:
+            print(f"[FALHA DB] {exc}")
+            self.waha.enviar(chat_id, "O nosso sistema de localização está temporariamente indisponível.")
+            self._enviar_menu_principal(chat_id)
+
+    def _lidar_feedback(self, chat_id: str, mensagem: str) -> None:
+        if mensagem == "1":
+            self.waha.enviar(chat_id, "Ficamos felizes em ajudar. Deseja utilizar outro serviço?\n1 - Sim\n2 - Não")
+            sessoes[chat_id]['estado'] = 'pos_feedback'
+        else:
+            sessoes[chat_id]['indice_busca'] += 1
+            self._apresentar_delegacia(chat_id, alternativa=True)
+
+    def _lidar_pos_feedback(self, chat_id: str, mensagem: str) -> None:
+        if mensagem == "1":
+            self._enviar_menu_principal(chat_id)
+        else:
+            self.waha.enviar(chat_id, "Obrigado por utilizar nossos serviços!")
+            sessoes[chat_id]['estado'] = 'novo'
+
+    def _lidar_refazer(self, chat_id: str, mensagem: str) -> None:
+        if mensagem == "1":
+            self.waha.enviar(chat_id, "Por favor, me informe o seu bairro e a sua cidade para que eu possa localizar a delegacia mais próxima no meu sistema. Mande exatamente: \"BAIRRO, CIDADE\"")
+            sessoes[chat_id]['estado'] = 'busca_delegacias'
+        else:
+            self._enviar_menu_principal(chat_id)
+
+    def _lidar_humano(self, chat_id: str, mensagem: str) -> None:
+        if mensagem.lower() in ["voltar", "menu", "cancelar"]:
+            self._enviar_menu_principal(chat_id)
+
+def get_orquestrador() -> OrquestradorDeTriagem:
+    return OrquestradorDeTriagem(
+        waha=WahaOutboundAdapter(),
+        repo=DelegaciaRepository(),
+        ia=ServicoTriagemIA()
+    )
+
+@app.post("/webhook", status_code=status.HTTP_200_OK)
+async def receber_webhook(
+    evento: WebhookEventDTO,
+    background_tasks: BackgroundTasks,
+    orquestrador: OrquestradorDeTriagem = Depends(get_orquestrador)
+):
+
+    if evento.event != "message":
+        return {"status": "ignorado"}
+
+    remetente = evento.payload.remetente
+    corpo = evento.payload.texto_limpo
+
+    if not remetente or "@g.us" in remetente or not corpo:
+        return {"status": "ignorado"}
+
+    if NUMERO_AUTORIZADO and NUMERO_AUTORIZADO not in remetente:
+        print(f"[SEGURANÇA] Bloqueado remetente não autorizado: {remetente}")
+        return {"status": "ignorado"}
+
+    background_tasks.add_task(orquestrador.executar_ciclo, remetente, corpo)
     
-    if dados_banco is None:
-        enviar_waha(chat_id, "Desculpe, não consegui consultar o banco de dados no momento.")
-        enviar_menu_principal(chat_id)
-    elif len(dados_banco) == 0:
-        enviar_waha(chat_id, "Nenhum resultado encontrado. Deseja digitar sua localidade novamente?\n1 - Sim\n2 - Não")
-        sessoes[chat_id]['estado'] = 'refazer_busca'
-    else:
-        resultados_unicos = []
-        enderecos_vistos = set()
-        
-        for delegacia in dados_banco:
-            end_texto = delegacia.get('endereco', '').strip().lower()
-            if end_texto not in enderecos_vistos:
-                enderecos_vistos.add(end_texto)
-                resultados_unicos.append(delegacia)
-
-        sessoes[chat_id]['resultados_busca'] = resultados_unicos
-        sessoes[chat_id]['indice_busca'] = 0
-        sessoes[chat_id]['estado'] = 'feedback_busca'
-        apresentar_resultado_delegacia(chat_id)
-
-def lidar_com_feedback_busca(chat_id, mensagem):
-    if mensagem == "1":
-        enviar_waha(chat_id, "Ficamos felizes em ajudar. Deseja utilizar outro serviço?\n1 - Sim\n2 - Não")
-        sessoes[chat_id]['estado'] = 'pos_feedback'
-    else:
-        # Avança para a próxima delegacia da lista
-        sessoes[chat_id]['indice_busca'] += 1
-        apresentar_resultado_delegacia(chat_id, alternativa=True)
-
-def lidar_com_pos_feedback(chat_id, mensagem):
-    if mensagem == "1":
-        enviar_menu_principal(chat_id)
-    else:
-        enviar_waha(chat_id, "Obrigado por utilizar nossos serviços!")
-        sessoes[chat_id]['estado'] = 'novo'
-
-def lidar_com_refazer_busca(chat_id, mensagem):
-    if mensagem == "1":
-        enviar_waha(chat_id, "Por favor, me informe o seu bairro e a sua cidade para que eu possa localizar a delegacia mais próxima no meu sistema. Mande exatamente: \"BAIRRO, CIDADE\"")
-        sessoes[chat_id]['estado'] = 'busca_delegacias'
-    else:
-        enviar_menu_principal(chat_id)
-
-def lidar_com_atendimento_humano(chat_id, mensagem):
-    if mensagem.lower() in ["voltar", "menu", "cancelar"]:
-        enviar_menu_principal(chat_id)
-
-def rotear_estado_conversa(chat_id, mensagem):
-    """Lê em qual estágio a conversa está e delega para a função correta."""
-    if chat_id not in sessoes:
-        sessoes[chat_id] = {'estado': 'novo', 'historico': []}
-        enviar_menu_principal(chat_id)
-        return
-
-    estado_atual = sessoes[chat_id]['estado']
-    
-    if estado_atual in ['menu', 'novo', 'bo_online']:
-        lidar_com_menu_principal(chat_id, mensagem)
-    elif estado_atual == 'busca_delegacias':
-        lidar_com_busca_delegacias(chat_id, mensagem)
-    elif estado_atual == 'feedback_busca':
-        lidar_com_feedback_busca(chat_id, mensagem)
-    elif estado_atual == 'pos_feedback':
-        lidar_com_pos_feedback(chat_id, mensagem)
-    elif estado_atual == 'refazer_busca':
-        lidar_com_refazer_busca(chat_id, mensagem)
-    elif estado_atual == 'atendimento_humano':
-        lidar_com_atendimento_humano(chat_id, mensagem)
-
-def processar_evento_whatsapp(dados):
-    """Valida a origem da mensagem antes de processar as regras de negócio."""
-    payload = dados.get("payload", {})
-    chat_id = payload.get("from")
-    mensagem = payload.get("body", "").strip()
-    
-    if not chat_id or "@g.us" in chat_id or not mensagem:
-        return "ignorado"
-
-    if NUMERO_AUTORIZADO and str(NUMERO_AUTORIZADO) not in chat_id:
-        print(f"Bloqueado: Mensagem recebida de número não autorizado ({chat_id})")
-        return "bloqueado"
-
-    rotear_estado_conversa(chat_id, mensagem)
-    return "sucesso"
-
-@app.route('/webhook', methods=['POST'])
-def webhook_waha():
-    """Ponto de entrada exclusivo para rede. Não processa regras de negócio."""
-    dados = request.json
-    
-    if dados.get("event") != "message":
-        return jsonify({"status": "ignorado"})
-        
-    resultado = processar_evento_whatsapp(dados)
-    return jsonify({"status": resultado})
+    return {"status": "ok"}
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    import uvicorn
+    uvicorn.run("app:app", host="0.0.0.0", port=5000, reload=True)

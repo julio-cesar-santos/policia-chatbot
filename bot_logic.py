@@ -1,74 +1,82 @@
 import os
 import requests
+from typing import List, Dict, Optional
 from dotenv import load_dotenv
 
-# Carrega as variáveis do ficheiro .env para a memória
 load_dotenv()
 
-# Puxa as chaves de acesso diretamente do ambiente
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+class IAIntegrationError(Exception):
+    """Erro disparado quando o motor de Inteligência Artificial falha."""
+    pass
 
-# --- CORREÇÃO: O URL agora vem do .env. Se não existir, usa o local para os testes ---
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-SUPABASE_URL = os.getenv("SUPABASE_URL", "http://localhost:8000/rest/v1/delegacias")
+class DatabaseIntegrationError(Exception):
+    """Erro disparado quando a comunicação com a Base de Dados falha."""
+    pass
 
-def processar_ia(chat_id, mensagem_usuario):
-    """Integração com o Llama 3.1 a correr via serviço do Groq."""
-    
-    prompt_sistema = (
-        "Você é o assistente de triagem da Polícia Civil de Pernambuco. Seu tom é oficial e objetivo.\n\n"
-        "REGRAS ABSOLUTAS E INQUEBRÁVEIS:\n"
-        "1. É ESTRITAMENTE PROIBIDO fazer investigação informal. NUNCA faça perguntas ao cidadão.\n"
-        "2. É ESTRITAMENTE PROIBIDO demonstrar empatia excessiva.\n"
-        "3. Se o cidadão relatar um CRIME GRAVE: Pare imediatamente e oriente ir a uma delegacia física ou ligar 190.\n"
-        "4. Se o cidadão relatar furto simples: Oriente B.O. Online.\n"
-        "5. REGRA DE ROTEAMENTO: Se a resposta for para um CRIME GRAVE ou exigir atendimento humano, adicione OBRIGATORIAMENTE a exata tag [TRANSBORDO] no final do seu texto."
-    )
+class ServicoTriagemIA:
+    def __init__(self):
+        self.api_key = os.getenv("GROQ_API_KEY", "")
+        self.api_url = "https://api.groq.com/openai/v1/chat/completions"
+        self.modelo = "llama-3.1-8b-instant"
+        self.prompt_sistema = (
+            "Você é o assistente de triagem da Polícia Civil de Pernambuco. Seu tom é oficial e objetivo.\n\n"
+            "REGRAS ABSOLUTAS E INQUEBRÁVEIS:\n"
+            "1. É ESTRITAMENTE PROIBIDO fazer investigação informal. NUNCA faça perguntas ao cidadão.\n"
+            "2. É ESTRITAMENTE PROIBIDO demonstrar empatia excessiva.\n"
+            "3. Se o cidadão relatar um CRIME GRAVE: Pare imediatamente e oriente ir a uma delegacia física ou ligar 190.\n"
+            "4. Se o cidadão relatar furto simples: Oriente B.O. Online.\n"
+            "5. REGRA DE ROTEAMENTO: Se a resposta for para um CRIME GRAVE ou exigir atendimento humano, adicione OBRIGATORIAMENTE a exata tag [TRANSBORDO] no final do seu texto."
+        )
 
-    payload_ia = {
-        "model": "llama-3.1-8b-instant",
-        "messages": [
-            {"role": "system", "content": prompt_sistema},
-            {"role": "user", "content": f"O cidadão enviou: {mensagem_usuario}\nResponda APENAS como o assistente."}
-        ],
-        "temperature": 0
-    }
-    
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    
-    try:
-        response = requests.post(GROQ_URL, headers=headers, json=payload_ia)
-        response.raise_for_status() 
+    def analisar_relato(self, mensagem_usuario: str) -> str:
+        """Envia a mensagem do cidadão para o LLM e retorna a orientação."""
         
-        return response.json()['choices'][0]['message']['content']
+        payload = {
+            "model": self.modelo,
+            "messages": [
+                {"role": "system", "content": self.prompt_sistema},
+                {"role": "user", "content": f"O cidadão enviou: {mensagem_usuario}\nResponda APENAS como o assistente."}
+            ],
+            "temperature": 0.0
+        }
         
-    except Exception as e:
-        print(f"Erro na API do Groq: {e}")
-        return "Desculpe, estou a enfrentar instabilidades no momento. Tente novamente mais tarde."
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        try:
+            response = requests.post(self.api_url, headers=headers, json=payload, timeout=15)
+            response.raise_for_status() 
+            return response.json()['choices'][0]['message']['content']
+        
+        except requests.RequestException as erro:
+            raise IAIntegrationError(f"Falha de comunicação com o LLM (Groq): {erro}")
 
-def buscar_delegacias(localidade):
-    """Faz a busca e retorna a lista inteira de resultados do Supabase."""
-    if not SUPABASE_KEY:
-         return None
 
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}"
-    }
-    
-    url_busca = f"{SUPABASE_URL}?endereco=ilike.*{localidade}*"
-    
-    try:
-        resposta = requests.get(url_busca, headers=headers)
-        resposta.raise_for_status()
+class DelegaciaRepository:
+    def __init__(self):
+        self.api_key = os.getenv("SUPABASE_KEY", "")
+        self.base_url = os.getenv("SUPABASE_URL", "http://localhost:8000/rest/v1/delegacias")
+
+    def buscar_por_localidade(self, localidade: str) -> Optional[List[Dict]]:
+        """Busca delegacias filtrando pelo endereço fornecido."""
         
-        # Devolve a lista pura (ex: [delegacia1, delegacia2]) ou uma lista vazia []
-        return resposta.json()
+        if not self.api_key:
+            raise DatabaseIntegrationError("A chave de API da base de dados não foi encontrada no ambiente.")
+
+        headers = {
+            "apikey": self.api_key,
+            "Authorization": f"Bearer {self.api_key}"
+        }
         
-    except Exception as e:
-        print(f"Erro na API do Supabase: {e}")
-        return None
+        url_busca = f"{self.base_url}?endereco=ilike.*{localidade}*"
+        
+        try:
+            resposta = requests.get(url_busca, headers=headers, timeout=10)
+            resposta.raise_for_status()
+            
+            return resposta.json()
+            
+        except requests.RequestException as erro:
+            raise DatabaseIntegrationError(f"Falha de comunicação com o Supabase: {erro}")
