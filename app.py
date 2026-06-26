@@ -4,12 +4,10 @@ from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 from bot_logic import processar_ia, buscar_delegacias
 
-# Carrega as variáveis do arquivo .env
 load_dotenv()
 
 app = Flask(__name__)
 
-# Memória temporária das conversas
 sessoes = {}
 
 WAHA_URL = "http://localhost:3000/api/sendText"
@@ -30,7 +28,7 @@ def enviar_waha(chat_id, texto):
         print(f"Erro crítico de conexão com o WAHA: {e}")
 
 def enviar_menu_principal(chat_id):
-    """Envia o menu principal dividido em 3 balões."""
+    """Reinicia o estado e envia as opções iniciais."""
     sessoes[chat_id]['estado'] = 'menu'
     
     enviar_waha(chat_id, "Olá! Sou o assistente da *Polícia Civil de Pernambuco*. Como posso ajudar você hoje?")
@@ -48,8 +46,26 @@ def enviar_menu_principal(chat_id):
     enviar_waha(chat_id, texto_opcoes)
     enviar_waha(chat_id, 'Para voltar ao menu, digite "Menu" ou "Voltar".')
 
-def roteador_principal(chat_id, mensagem):
-    """Gerencia as escolhas do menu e aciona a IA quando necessário."""
+def apresentar_resultado_delegacia(chat_id, alternativa=False):
+    indice = sessoes[chat_id].get('indice_busca', 0)
+    resultados = sessoes[chat_id].get('resultados_busca', [])
+    
+    if indice < len(resultados):
+        delegacia = resultados[indice]
+        nome = delegacia.get('descricao', 'Delegacia da Polícia Civil')
+        endereco = delegacia.get('endereco', 'Endereço não cadastrado')
+        telefone = delegacia.get('telefones', 'Telefone não disponível')
+        
+        intro = "Aqui está outra opção próxima:\n\n" if alternativa else "A delegacia mais próxima seria:\n\n"
+        texto_resultado = f"{intro}*{nome}*\n\nEndereço: {endereco}\n\nContato: {telefone}"
+        
+        enviar_waha(chat_id, texto_resultado)
+        enviar_waha(chat_id, "Esse resultado foi útil?\n1 - Sim\n2 - Não")
+    else:
+        enviar_waha(chat_id, "Não encontrei mais delegacias para essa localidade no sistema.\n\nDeseja digitar sua localidade novamente?\n1 - Sim\n2 - Não")
+        sessoes[chat_id]['estado'] = 'refazer_busca'
+
+def lidar_com_menu_principal(chat_id, mensagem):
     msg_limpa = str(mensagem).strip().lower()
     texto_voltar = 'Para voltar ao menu, digite "Menu" ou "Voltar".'
 
@@ -100,9 +116,7 @@ def roteador_principal(chat_id, mensagem):
         sessoes[chat_id]['estado'] = 'atendimento_humano'
         texto = "Compreendo. Por questões de segurança ou complexidade, estou transferindo o seu atendimento para o plantão policial. Por favor, aguarde um instante na linha."
         enviar_waha(chat_id, texto)
-        
-        texto_sistema = "_(Para cancelar a transferência e voltar ao menu principal, digite \"Menu\")_"
-        enviar_waha(chat_id, texto_sistema)
+        enviar_waha(chat_id, "_(Para cancelar a transferência e voltar ao menu principal, digite \"Menu\")_")
         
     elif msg_limpa in ["voltar", "menu"]:
         enviar_menu_principal(chat_id)
@@ -113,128 +127,116 @@ def roteador_principal(chat_id, mensagem):
         if "[TRANSBORDO]" in resposta_ia:
              texto_transbordo = "Compreendo. Por questões de segurança ou complexidade, estou transferindo o seu atendimento para o plantão policial. Por favor, aguarde um instante na linha."
              enviar_waha(chat_id, texto_transbordo)
-             
-             texto_sistema = "_(Para cancelar a transferência e voltar ao menu principal, digite \"Menu\")_"
-             enviar_waha(chat_id, texto_sistema)
-             
+             enviar_waha(chat_id, "_(Para cancelar a transferência e voltar ao menu principal, digite \"Menu\")_")
              sessoes[chat_id]['estado'] = 'atendimento_humano'
         else:
              enviar_waha(chat_id, resposta_ia)
              enviar_waha(chat_id, texto_voltar)
 
+def lidar_com_busca_delegacias(chat_id, mensagem):
+    if mensagem.lower() in ["voltar", "menu"]:
+        enviar_menu_principal(chat_id)
+        return
 
-@app.route('/webhook', methods=['POST'])
-def webhook_waha():
-    """Ponto de entrada que escuta o WAHA e distribui as ações."""
-    dados = request.json
+    dados_banco = buscar_delegacias(mensagem)
     
-    if dados.get("event") != "message":
-        return jsonify({"status": "ignorado"})
+    if dados_banco is None:
+        enviar_waha(chat_id, "Desculpe, não consegui consultar o banco de dados no momento.")
+        enviar_menu_principal(chat_id)
+    elif len(dados_banco) == 0:
+        enviar_waha(chat_id, "Nenhum resultado encontrado. Deseja digitar sua localidade novamente?\n1 - Sim\n2 - Não")
+        sessoes[chat_id]['estado'] = 'refazer_busca'
+    else:
+        resultados_unicos = []
+        enderecos_vistos = set()
         
+        for delegacia in dados_banco:
+            end_texto = delegacia.get('endereco', '').strip().lower()
+            if end_texto not in enderecos_vistos:
+                enderecos_vistos.add(end_texto)
+                resultados_unicos.append(delegacia)
+
+        sessoes[chat_id]['resultados_busca'] = resultados_unicos
+        sessoes[chat_id]['indice_busca'] = 0
+        sessoes[chat_id]['estado'] = 'feedback_busca'
+        apresentar_resultado_delegacia(chat_id)
+
+def lidar_com_feedback_busca(chat_id, mensagem):
+    if mensagem == "1":
+        enviar_waha(chat_id, "Ficamos felizes em ajudar. Deseja utilizar outro serviço?\n1 - Sim\n2 - Não")
+        sessoes[chat_id]['estado'] = 'pos_feedback'
+    else:
+        # Avança para a próxima delegacia da lista
+        sessoes[chat_id]['indice_busca'] += 1
+        apresentar_resultado_delegacia(chat_id, alternativa=True)
+
+def lidar_com_pos_feedback(chat_id, mensagem):
+    if mensagem == "1":
+        enviar_menu_principal(chat_id)
+    else:
+        enviar_waha(chat_id, "Obrigado por utilizar nossos serviços!")
+        sessoes[chat_id]['estado'] = 'novo'
+
+def lidar_com_refazer_busca(chat_id, mensagem):
+    if mensagem == "1":
+        enviar_waha(chat_id, "Por favor, me informe o seu bairro e a sua cidade para que eu possa localizar a delegacia mais próxima no meu sistema. Mande exatamente: \"BAIRRO, CIDADE\"")
+        sessoes[chat_id]['estado'] = 'busca_delegacias'
+    else:
+        enviar_menu_principal(chat_id)
+
+def lidar_com_atendimento_humano(chat_id, mensagem):
+    if mensagem.lower() in ["voltar", "menu", "cancelar"]:
+        enviar_menu_principal(chat_id)
+
+def rotear_estado_conversa(chat_id, mensagem):
+    """Lê em qual estágio a conversa está e delega para a função correta."""
+    if chat_id not in sessoes:
+        sessoes[chat_id] = {'estado': 'novo', 'historico': []}
+        enviar_menu_principal(chat_id)
+        return
+
+    estado_atual = sessoes[chat_id]['estado']
+    
+    if estado_atual in ['menu', 'novo', 'bo_online']:
+        lidar_com_menu_principal(chat_id, mensagem)
+    elif estado_atual == 'busca_delegacias':
+        lidar_com_busca_delegacias(chat_id, mensagem)
+    elif estado_atual == 'feedback_busca':
+        lidar_com_feedback_busca(chat_id, mensagem)
+    elif estado_atual == 'pos_feedback':
+        lidar_com_pos_feedback(chat_id, mensagem)
+    elif estado_atual == 'refazer_busca':
+        lidar_com_refazer_busca(chat_id, mensagem)
+    elif estado_atual == 'atendimento_humano':
+        lidar_com_atendimento_humano(chat_id, mensagem)
+
+def processar_evento_whatsapp(dados):
+    """Valida a origem da mensagem antes de processar as regras de negócio."""
     payload = dados.get("payload", {})
     chat_id = payload.get("from")
     mensagem = payload.get("body", "").strip()
     
     if not chat_id or "@g.us" in chat_id or not mensagem:
-        return jsonify({"status": "ignorado"})
+        return "ignorado"
 
-    # Bloqueio de segurança
     if NUMERO_AUTORIZADO and str(NUMERO_AUTORIZADO) not in chat_id:
         print(f"Bloqueado: Mensagem recebida de número não autorizado ({chat_id})")
-        return jsonify({"status": "bloqueado"})
+        return "bloqueado"
+
+    rotear_estado_conversa(chat_id, mensagem)
+    return "sucesso"
+
+@app.route('/webhook', methods=['POST'])
+def webhook_waha():
+    """Ponto de entrada exclusivo para rede. Não processa regras de negócio."""
+    dados = request.json
     
-    # Inicia a sessão se o usuário for novo
-    if chat_id not in sessoes:
-        sessoes[chat_id] = {'estado': 'novo', 'historico': []}
-        enviar_menu_principal(chat_id)
-        return jsonify({"status": "sucesso"})
-    
-    estado_atual = sessoes[chat_id]['estado']
-    
-    # Máquina de estados
-    if estado_atual in ['menu', 'novo', 'bo_online']:
-        roteador_principal(chat_id, mensagem)
+    if dados.get("event") != "message":
+        return jsonify({"status": "ignorado"})
         
-    elif estado_atual == 'busca_delegacias':
-         if mensagem.lower() in ["voltar", "menu"]:
-             enviar_menu_principal(chat_id)
-         else:
-             dados_banco = buscar_delegacias(mensagem)
-             
-             if dados_banco is None:
-                 enviar_waha(chat_id, "Desculpe, não consegui consultar o banco de dados no momento.")
-                 enviar_menu_principal(chat_id)
-             elif len(dados_banco) == 0:
-                 enviar_waha(chat_id, "Nenhum resultado encontrado. Deseja digitar sua localidade novamente?\n1 - Sim\n2 - Não")
-                 sessoes[chat_id]['estado'] = 'refazer_busca'
-             else:
-                 # Filtro antiduplicidade
-                 resultados_unicos = []
-                 enderecos_vistos = set()
-                 
-                 for delegacia in dados_banco:
-                     end_texto = delegacia.get('endereco', '').strip().lower()
-                     if end_texto not in enderecos_vistos:
-                         enderecos_vistos.add(end_texto)
-                         resultados_unicos.append(delegacia)
+    resultado = processar_evento_whatsapp(dados)
+    return jsonify({"status": resultado})
 
-                 sessoes[chat_id]['resultados_busca'] = resultados_unicos
-                 sessoes[chat_id]['indice_busca'] = 0
-                 
-                 delegacia = resultados_unicos[0]
-                 nome = delegacia.get('descricao', 'Delegacia da Polícia Civil')
-                 endereco = delegacia.get('endereco', 'Endereço não cadastrado')
-                 telefone = delegacia.get('telefones', 'Telefone não disponível')
-                 
-                 texto_resultado = f"A delegacia mais próxima seria:\n\n*{nome}*\n\nEndereço: {endereco}\n\nContato: {telefone}"
-                 
-                 enviar_waha(chat_id, texto_resultado)
-                 enviar_waha(chat_id, "Esse resultado foi útil?\n1 - Sim\n2 - Não")
-                 sessoes[chat_id]['estado'] = 'feedback_busca'
-
-    elif estado_atual == 'feedback_busca':
-         if mensagem == "1":
-             enviar_waha(chat_id, "Ficamos felizes em ajudar. Deseja utilizar outro serviço?\n1 - Sim\n2 - Não")
-             sessoes[chat_id]['estado'] = 'pos_feedback'
-         else:
-             # Avança para a próxima delegacia da lista
-             sessoes[chat_id]['indice_busca'] += 1
-             indice = sessoes[chat_id]['indice_busca']
-             resultados = sessoes[chat_id].get('resultados_busca', [])
-             
-             if indice < len(resultados):
-                 delegacia = resultados[indice]
-                 nome = delegacia.get('descricao', 'Delegacia da Polícia Civil')
-                 endereco = delegacia.get('endereco', 'Endereço não cadastrado')
-                 telefone = delegacia.get('telefones', 'Telefone não disponível')
-                 
-                 texto_resultado = f"Aqui está outra opção próxima:\n\n*{nome}*\n\nEndereço: {endereco}\n\nContato: {telefone}"
-                 
-                 enviar_waha(chat_id, texto_resultado)
-                 enviar_waha(chat_id, "Esse resultado foi útil?\n1 - Sim\n2 - Não")
-             else:
-                 enviar_waha(chat_id, "Não encontrei mais delegacias para essa localidade no sistema.\n\nDeseja digitar sua localidade novamente?\n1 - Sim\n2 - Não")
-                 sessoes[chat_id]['estado'] = 'refazer_busca'
-
-    elif estado_atual == 'pos_feedback':
-         if mensagem == "1":
-             enviar_menu_principal(chat_id)
-         else:
-             enviar_waha(chat_id, "Obrigado por utilizar nossos serviços!")
-             sessoes[chat_id]['estado'] = 'novo'
-             
-    elif estado_atual == 'refazer_busca':
-         if mensagem == "1":
-             enviar_waha(chat_id, "Por favor, me informe o seu bairro e a sua cidade para que eu possa localizar a delegacia mais próxima no meu sistema. Mande exatamente: \"BAIRRO, CIDADE\"")
-             sessoes[chat_id]['estado'] = 'busca_delegacias'
-         else:
-             enviar_menu_principal(chat_id)
-
-    elif estado_atual == 'atendimento_humano':
-         if mensagem.lower() in ["voltar", "menu", "cancelar"]:
-             enviar_menu_principal(chat_id)
-
-    return jsonify({"status": "sucesso"})
 
 if __name__ == '__main__':
     app.run(debug=True)
