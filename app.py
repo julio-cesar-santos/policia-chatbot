@@ -136,22 +136,19 @@ class OrquestradorDeTriagem:
                 "⚠️ *Atenção:* Ele é válido apenas para furtos, perda de documentos, acidentes de trânsito sem vítimas e crimes cibernéticos. Casos de violência física, roubo com arma de fogo ou furto de veículos exigem ida à delegacia física.\n\n"
                 "Acesse o link para registrar: http://servicos.sds.pe.gov.br/delegacia/"
             )
-            self.waha.enviar(chat_id, texto)
-            self.waha.enviar(chat_id, self.msg_voltar)
+            self.waha.enviar(chat_id, f"{texto}{self.msg_voltar}")
             sessoes[chat_id]['estado'] = 'menu'
             
         elif msg_lower == "2":
             sessoes[chat_id]['estado'] = 'busca_delegacias'
-            self.waha.enviar(chat_id, "Por favor, me informe o seu bairro e a sua cidade para que eu possa localizar a delegacia mais próxima no meu sistema. Mande exatamente: \"BAIRRO, CIDADE\"")
-            self.waha.enviar(chat_id, self.msg_voltar)
+            self.waha.enviar(chat_id, f'Por favor, me informe o seu bairro e a sua cidade para que eu possa localizar a delegacia mais próxima no meu sistema. Mande exatamente: "BAIRRO, CIDADE"{self.msg_voltar}')
             
         elif msg_lower == "3":
             texto = (
                 "Para fazer uma denúncia anônima com total sigilo, você pode ligar gratuitamente para o número *181 (Disque Denúncia)*.\n\n"
                 "Se preferir, você também pode digitar os detalhes da denúncia aqui mesmo no chat e eu farei o registro inicial."
             )
-            self.waha.enviar(chat_id, texto)
-            self.waha.enviar(chat_id, self.msg_voltar)
+            self.waha.enviar(chat_id, f"{texto}{self.msg_voltar}")
             sessoes[chat_id]['estado'] = 'menu' 
 
         elif msg_lower == "4":
@@ -159,8 +156,7 @@ class OrquestradorDeTriagem:
                 "O acompanhamento do seu Boletim de Ocorrência deve ser feito exclusivamente no site oficial da Polícia Civil de Pernambuco, utilizando o número de protocolo gerado no momento do seu registro.\n\n"
                 "Acesse: https://delegaciapelainternet.pc.pe.gov.br/delegacia/emissaoBo"
             )
-            self.waha.enviar(chat_id, texto)
-            self.waha.enviar(chat_id, self.msg_voltar)
+            self.waha.enviar(chat_id, f"{texto}{self.msg_voltar}")
             sessoes[chat_id]['estado'] = 'menu'
 
         elif msg_lower == "5":
@@ -168,8 +164,7 @@ class OrquestradorDeTriagem:
                 "A Lei 7550/77 trata das taxas de fiscalização e licenciamento policial (necessárias para alvarás de eventos, shows, segurança privada, etc.).\n\n"
                 "Para prosseguir, o cidadão deve emitir o DAE (Documento de Arrecadação Estadual) através do portal de serviços da PCPE."
             )
-            self.waha.enviar(chat_id, texto)
-            self.waha.enviar(chat_id, self.msg_voltar)
+            self.waha.enviar(chat_id, f"{texto}{self.msg_voltar}")
             sessoes[chat_id]['estado'] = 'menu'
 
         elif msg_lower == "6":

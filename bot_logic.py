@@ -29,8 +29,7 @@ class ServicoTriagemIA:
         )
 
     def analisar_relato(self, mensagem_usuario: str) -> str:
-        """Envia a mensagem do cidadão para o LLM e retorna a orientação."""
-        
+
         payload = {
             "model": self.modelo,
             "messages": [
@@ -60,7 +59,6 @@ class DelegaciaRepository:
         self.base_url = os.getenv("SUPABASE_URL", "http://localhost:8000/rest/v1/delegacias")
 
     def buscar_por_localidade(self, localidade: str) -> Optional[List[Dict]]:
-        """Busca delegacias filtrando pelo endereço fornecido."""
         
         if not self.api_key:
             raise DatabaseIntegrationError("A chave de API da base de dados não foi encontrada no ambiente.")
@@ -70,13 +68,36 @@ class DelegaciaRepository:
             "Authorization": f"Bearer {self.api_key}"
         }
         
-        url_busca = f"{self.base_url}?endereco=ilike.*{localidade}*"
+        termos = [t.strip() for t in localidade.split(",")]
         
         try:
-            resposta = requests.get(url_busca, headers=headers, timeout=10)
-            resposta.raise_for_status()
-            
-            return resposta.json()
+            if len(termos) > 1:
+                bairro = termos[0]
+                cidade = termos[1]
+                
+                query_estrita = f"and=(endereco.ilike.*{bairro}*,endereco.ilike.*{cidade}*)"
+                url_busca = f"{self.base_url}?{query_estrita}"
+                resposta = requests.get(url_busca, headers=headers, timeout=10)
+                resposta.raise_for_status()
+                dados = resposta.json()
+                
+                if dados:
+                    return dados
+                    
+                query_ampla = f"endereco=ilike.*{cidade}*"
+                url_fallback = f"{self.base_url}?{query_ampla}"
+                resposta_fallback = requests.get(url_fallback, headers=headers, timeout=10)
+                resposta_fallback.raise_for_status()
+                return resposta_fallback.json()
+
+            else:
+                termo_unico = termos[0]
+                query_str = f"endereco=ilike.*{termo_unico}*"
+                url_busca = f"{self.base_url}?{query_str}"
+                
+                resposta = requests.get(url_busca, headers=headers, timeout=10)
+                resposta.raise_for_status()
+                return resposta.json()
             
         except requests.RequestException as erro:
             raise DatabaseIntegrationError(f"Falha de comunicação com o Supabase: {erro}")
