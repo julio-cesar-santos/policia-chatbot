@@ -1,7 +1,14 @@
 services:
   waha:
     image: devlikeapro/waha
-    container_name: waha_delegacia
     ports:
       - "3000:3000"
-    restart: unless-stopped
+    environment:
+      - WHATSAPP_API_KEY=delegacia50
+      - WHATSAPP_SWAGGER_USERNAME=admin
+      - WHATSAPP_SWAGGER_PASSWORD=admin
+      - WAHA_DASHBOARD_USERNAME=admin
+      - WAHA_DASHBOARD_PASSWORD=admin
+      - WAHA_WEBHOOK_URL=http://172.18.0.1:5000/webhook
+      - WAHA_WEBHOOK_EVENTS=message
+      - WAHA_WEBHOOK_CONcurrency=10
