@@ -28,3 +28,10 @@ Thumbs.db
 
 # Ignorar a pasta clonada do Supabase (ela já tem o próprio repositório)
 supabase/
+
+# Banco de dados vetorial gerado localmente
+faiss_index/
+
+# Scripts de rascunho/playground
+teste_ia.py
+ping_db.py

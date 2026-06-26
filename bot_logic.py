@@ -2,6 +2,8 @@ import os
 import requests
 from typing import List, Dict, Optional
 from dotenv import load_dotenv
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
 
 load_dotenv()
 
@@ -18,22 +20,46 @@ class ServicoTriagemIA:
         self.api_key = os.getenv("GROQ_API_KEY", "")
         self.api_url = "https://api.groq.com/openai/v1/chat/completions"
         self.modelo = "llama-3.1-8b-instant"
-        self.prompt_sistema = (
+
+        print("[IA] Carregando a memória vetorial de procedimentos...")
+        try:
+            embeddings = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+            )
+            self.banco_vetorial = FAISS.load_local(
+                "faiss_index", 
+                embeddings, 
+                allow_dangerous_deserialization=True 
+            )
+            print("[IA] Memória carregada com sucesso!")
+        except Exception as e:
+            print(f"[IA] Aviso: Falha ao carregar o FAISS. Erro: {e}")
+            self.banco_vetorial = None
+
+        self.prompt_sistema_base = (
             "Você é o assistente de triagem da Polícia Civil de Pernambuco. Seu tom é oficial e objetivo.\n\n"
             "REGRAS ABSOLUTAS E INQUEBRÁVEIS:\n"
             "1. É ESTRITAMENTE PROIBIDO fazer investigação informal. NUNCA faça perguntas ao cidadão.\n"
             "2. É ESTRITAMENTE PROIBIDO demonstrar empatia excessiva.\n"
             "3. Se o cidadão relatar um CRIME GRAVE: Pare imediatamente e oriente ir a uma delegacia física ou ligar 190.\n"
             "4. Se o cidadão relatar furto simples: Oriente B.O. Online.\n"
-            "5. REGRA DE ROTEAMENTO: Se a resposta for para um CRIME GRAVE ou exigir atendimento humano, adicione OBRIGATORIAMENTE a exata tag [TRANSBORDO] no final do seu texto."
+            "5. REGRA DE ROTEAMENTO: Se a resposta for para um CRIME GRAVE ou exigir atendimento humano, adicione OBRIGATORIAMENTE a exata tag [TRANSBORDO] no final do seu texto.\n\n"
+            "DOCUMENTAÇÃO OFICIAL DE RESPOSTA (Baseie-se 100% nisso para responder o cidadão):\n"
+            "{contexto_rag}"
         )
 
     def analisar_relato(self, mensagem_usuario: str) -> str:
+        contexto_extraido = "Nenhum documento adicional encontrado."
+        if self.banco_vetorial:
+            documentos_relevantes = self.banco_vetorial.similarity_search(mensagem_usuario, k=3)
+            contexto_extraido = "\n".join([doc.page_content for doc in documentos_relevantes])
+
+        prompt_final = self.prompt_sistema_base.format(contexto_rag=contexto_extraido)
 
         payload = {
             "model": self.modelo,
             "messages": [
-                {"role": "system", "content": self.prompt_sistema},
+                {"role": "system", "content": prompt_final},
                 {"role": "user", "content": f"O cidadão enviou: {mensagem_usuario}\nResponda APENAS como o assistente."}
             ],
             "temperature": 0.0
@@ -51,7 +77,6 @@ class ServicoTriagemIA:
         
         except requests.RequestException as erro:
             raise IAIntegrationError(f"Falha de comunicação com o LLM (Groq): {erro}")
-
 
 class DelegaciaRepository:
     def __init__(self):

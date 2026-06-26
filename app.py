@@ -21,12 +21,6 @@ app = FastAPI(
     version="2.0.0"
 )
 
-@app.post("/webhook-debug")
-async def debug_webhook(request: Request):
-    corpo = await request.json()
-    print(f"DEBUG CRU: {corpo}")
-    return {"status": "recebido"}
-
 sessoes: Dict[str, Dict[str, Any]] = {}
 NUMERO_AUTORIZADO = os.getenv("NUMERO_AUTORIZADO", "").strip()
 
@@ -75,7 +69,11 @@ class OrquestradorDeTriagem:
 
     def executar_ciclo(self, chat_id: str, mensagem: str) -> None:
         if chat_id not in sessoes:
-            sessoes[chat_id] = {'estado': 'novo', 'historico': []}
+            sessoes[chat_id] = {'estado': 'novo', 'historico': [], 'primeiro_acesso': True}
+            self._enviar_menu_principal(chat_id)
+            return
+
+        if mensagem.lower() in ["menu", "voltar"]:
             self._enviar_menu_principal(chat_id)
             return
 
@@ -96,8 +94,9 @@ class OrquestradorDeTriagem:
 
     def _enviar_menu_principal(self, chat_id: str) -> None:
         sessoes[chat_id]['estado'] = 'menu'
-        self.waha.enviar(chat_id, "Olá! Sou o assistente da *Polícia Civil de Pernambuco*. Como posso ajudar você hoje?")
-        texto_opcoes = (
+        
+        texto_completo = (
+            "Olá! Sou o assistente da *Polícia Civil de Pernambuco*. Como posso ajudar você hoje?\n\n"
             "Digite o número da opção desejada:\n"
             "1 - Registrar B.O. Online\n"
             "2 - Delegacias Próximas\n"
@@ -107,8 +106,12 @@ class OrquestradorDeTriagem:
             "6 - Falar com Atendente\n\n"
             "Ou digite diretamente o seu problema abaixo."
         )
-        self.waha.enviar(chat_id, texto_opcoes)
-        self.waha.enviar(chat_id, self.msg_voltar)
+        
+        if sessoes[chat_id].get('primeiro_acesso'):
+            texto_completo += '\n\n_Para voltar ao menu, digite "Menu" ou "Voltar"._'
+            sessoes[chat_id]['primeiro_acesso'] = False
+            
+        self.waha.enviar(chat_id, texto_completo)
 
     def _apresentar_delegacia(self, chat_id: str, alternativa: bool = False) -> None:
         indice = sessoes[chat_id].get('indice_busca', 0)
@@ -136,19 +139,18 @@ class OrquestradorDeTriagem:
                 "⚠️ *Atenção:* Ele é válido apenas para furtos, perda de documentos, acidentes de trânsito sem vítimas e crimes cibernéticos. Casos de violência física, roubo com arma de fogo ou furto de veículos exigem ida à delegacia física.\n\n"
                 "Acesse o link para registrar: http://servicos.sds.pe.gov.br/delegacia/"
             )
-            self.waha.enviar(chat_id, f"{texto}{self.msg_voltar}")
+            
             sessoes[chat_id]['estado'] = 'menu'
             
         elif msg_lower == "2":
             sessoes[chat_id]['estado'] = 'busca_delegacias'
-            self.waha.enviar(chat_id, f'Por favor, me informe o seu bairro e a sua cidade para que eu possa localizar a delegacia mais próxima no meu sistema. Mande exatamente: "BAIRRO, CIDADE"{self.msg_voltar}')
+            self.waha.enviar(chat_id, f'Por favor, me informe o seu bairro e a sua cidade para que eu possa localizar a delegacia mais próxima no meu sistema. Mande exatamente: "BAIRRO, CIDADE"')
             
         elif msg_lower == "3":
             texto = (
                 "Para fazer uma denúncia anônima com total sigilo, você pode ligar gratuitamente para o número *181 (Disque Denúncia)*.\n\n"
                 "Se preferir, você também pode digitar os detalhes da denúncia aqui mesmo no chat e eu farei o registro inicial."
             )
-            self.waha.enviar(chat_id, f"{texto}{self.msg_voltar}")
             sessoes[chat_id]['estado'] = 'menu' 
 
         elif msg_lower == "4":
@@ -156,7 +158,6 @@ class OrquestradorDeTriagem:
                 "O acompanhamento do seu Boletim de Ocorrência deve ser feito exclusivamente no site oficial da Polícia Civil de Pernambuco, utilizando o número de protocolo gerado no momento do seu registro.\n\n"
                 "Acesse: https://delegaciapelainternet.pc.pe.gov.br/delegacia/emissaoBo"
             )
-            self.waha.enviar(chat_id, f"{texto}{self.msg_voltar}")
             sessoes[chat_id]['estado'] = 'menu'
 
         elif msg_lower == "5":
@@ -164,7 +165,6 @@ class OrquestradorDeTriagem:
                 "A Lei 7550/77 trata das taxas de fiscalização e licenciamento policial (necessárias para alvarás de eventos, shows, segurança privada, etc.).\n\n"
                 "Para prosseguir, o cidadão deve emitir o DAE (Documento de Arrecadação Estadual) através do portal de serviços da PCPE."
             )
-            self.waha.enviar(chat_id, f"{texto}{self.msg_voltar}")
             sessoes[chat_id]['estado'] = 'menu'
 
         elif msg_lower == "6":
@@ -179,12 +179,11 @@ class OrquestradorDeTriagem:
             try:
                 resposta_ia = self.ia.analisar_relato(mensagem)
                 if "[TRANSBORDO]" in resposta_ia:
-                    self.waha.enviar(chat_id, "Compreendo. Por questões de segurança ou complexidade, estou transferindo o seu atendimento para o plantão policial. Por favor, aguarde um instante na linha.")
-                    self.waha.enviar(chat_id, "_(Para cancelar a transferência e voltar ao menu principal, digite \"Menu\")_")
+                    self.waha.enviar(chat_id, "Compreendo. Por questões de segurança ou complexidade, estou transferindo o seu atendimento para o plantão policial. Por favor, aguarde um instante na linha.\n\n_(Para cancelar a transferência e voltar ao menu principal, digite \"Menu\")_")
                     sessoes[chat_id]['estado'] = 'atendimento_humano'
                 else:
-                    self.waha.enviar(chat_id, resposta_ia)
-                    self.waha.enviar(chat_id, self.msg_voltar)
+                    mensagem_final = f"{resposta_ia}\n\n_{self.msg_voltar}_"
+                    self.waha.enviar(chat_id, mensagem_final)
             except IAIntegrationError as erro:
                 print(f"[FALHA LLM] {erro}")
                 self.waha.enviar(chat_id, "Desculpe, estou a enfrentar instabilidades técnicas no momento. Tente novamente em alguns minutos.")
@@ -221,34 +220,50 @@ class OrquestradorDeTriagem:
         if mensagem == "1":
             self.waha.enviar(chat_id, "Ficamos felizes em ajudar. Deseja utilizar outro serviço?\n1 - Sim\n2 - Não")
             sessoes[chat_id]['estado'] = 'pos_feedback'
-        else:
+        elif mensagem == "2":
             sessoes[chat_id]['indice_busca'] += 1
             self._apresentar_delegacia(chat_id, alternativa=True)
+        else:
+            self.waha.enviar(chat_id, "Por favor, responda com o número 1 para Sim ou 2 para Não.")
 
     def _lidar_pos_feedback(self, chat_id: str, mensagem: str) -> None:
         if mensagem == "1":
             self._enviar_menu_principal(chat_id)
-        else:
-            self.waha.enviar(chat_id, "Obrigado por utilizar nossos serviços!")
+        elif mensagem == "2":
+            self.waha.enviar(chat_id, "Obrigado por utilizar nossos serviços! A Polícia Civil de Pernambuco está sempre à disposição.")
             sessoes[chat_id]['estado'] = 'novo'
+        else:
+            self.waha.enviar(chat_id, "Por favor, responda com o número 1 para Sim ou 2 para Não.")
 
     def _lidar_refazer(self, chat_id: str, mensagem: str) -> None:
         if mensagem == "1":
             self.waha.enviar(chat_id, "Por favor, me informe o seu bairro e a sua cidade para que eu possa localizar a delegacia mais próxima no meu sistema. Mande exatamente: \"BAIRRO, CIDADE\"")
             sessoes[chat_id]['estado'] = 'busca_delegacias'
         else:
-            self._enviar_menu_principal(chat_id)
+            self.waha.enviar(chat_id, "Compreendo. Deseja utilizar outro serviço?\n1 - Sim\n2 - Não")
+            sessoes[chat_id]['estado'] = 'pos_feedback'
 
     def _lidar_humano(self, chat_id: str, mensagem: str) -> None:
         if mensagem.lower() in ["voltar", "menu", "cancelar"]:
             self._enviar_menu_principal(chat_id)
 
+print("\n[SISTEMA] Inicializando adaptadores...")
+waha_global = WahaOutboundAdapter()
+repo_global = DelegaciaRepository()
+
+print("[SISTEMA] Aquecendo o cérebro da Inteligência Artificial...")
+ia_global = ServicoTriagemIA()
+
+print("[SISTEMA] Montando o Orquestrador...")
+orquestrador_global = OrquestradorDeTriagem(
+    waha=waha_global, 
+    repo=repo_global, 
+    ia=ia_global
+)
+print("[SISTEMA] Servidor 100% pronto e aguardando mensagens!\n")
+
 def get_orquestrador() -> OrquestradorDeTriagem:
-    return OrquestradorDeTriagem(
-        waha=WahaOutboundAdapter(),
-        repo=DelegaciaRepository(),
-        ia=ServicoTriagemIA()
-    )
+    return orquestrador_global
 
 @app.post("/webhook", status_code=status.HTTP_200_OK)
 async def receber_webhook(

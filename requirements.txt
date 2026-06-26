@@ -5,3 +5,12 @@ requests==2.31.0
 python-dotenv==1.0.1
 pytest==8.1.1
 pytest-html
+langchain
+langchain-community
+faiss-cpu
+sentence-transformers
+pypdf
+langchain-huggingface
+pytest-mock 
+httpx2
+locust
