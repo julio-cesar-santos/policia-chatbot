@@ -1,0 +1,14 @@
+# GUIA DE AGENDAMENTOS E FEEDBACK AO CIDADÃO
+
+## AGENDAMENTO DE ATENDIMENTOS PRESENCIAIS
+A Polícia Civil de Pernambuco utiliza o agendamento online para os seguintes serviços:
+1. Emissão de Carteira de Identidade (RG) e emissão de antecedentes criminais.
+2. Perícia Veicular (para transferência de propriedade e vistorias).
+
+O agendamento é obrigatório para reduzir filas. O horário de atendimento presencial é das 8h às 17h, de segunda a sexta-feira. O sistema de agendamento exige CPF e um número de telefone válido para confirmação. O não comparecimento sem aviso prévio resulta no cancelamento.
+
+## AVALIAÇÃO DO ATENDIMENTO (FEEDBACK)
+O feedback dos cidadãos é fundamental para a melhoria dos serviços. A avaliação pode ser realizada de três formas:
+1. **Chatbot (Imediata):** Ao final de cada atendimento, o cidadão pode atribuir uma nota de 1 a 5 estrelas.
+2. **Ouvidoria:** Para denúncias, elogios ou reclamações mais detalhadas, utilize o portal da Ouvidoria da SDS PE.
+3. **Presencial:** Questionários de satisfação estão disponíveis nas delegacias.
