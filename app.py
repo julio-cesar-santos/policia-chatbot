@@ -108,7 +108,7 @@ class OrquestradorDeTriagem:
         )
         
         if sessoes[chat_id].get('primeiro_acesso'):
-            texto_completo += '\n\n_Para voltar ao menu, digite "Menu" ou "Voltar"._'
+            texto_completo += '\n\nPara voltar ao menu, digite "Menu" ou "Voltar".'
             sessoes[chat_id]['primeiro_acesso'] = False
             
         self.waha.enviar(chat_id, texto_completo)
@@ -137,40 +137,50 @@ class OrquestradorDeTriagem:
             texto = (
                 "O boletim de ocorrência online pode ser feito pelo portal oficial da Secretaria de Defesa Social.\n\n"
                 "⚠️ *Atenção:* Ele é válido apenas para furtos, perda de documentos, acidentes de trânsito sem vítimas e crimes cibernéticos. Casos de violência física, roubo com arma de fogo ou furto de veículos exigem ida à delegacia física.\n\n"
-                "Acesse o link para registrar: http://servicos.sds.pe.gov.br/delegacia/"
+                "Acesse o link para registrar: http://servicos.sds.pe.gov.br/delegacia/\n\n"
+                f"_{self.msg_voltar}_"
             )
-            
+            self.waha.enviar(chat_id, texto)
             sessoes[chat_id]['estado'] = 'menu'
             
         elif msg_lower == "2":
             sessoes[chat_id]['estado'] = 'busca_delegacias'
-            self.waha.enviar(chat_id, f'Por favor, me informe o seu bairro e a sua cidade para que eu possa localizar a delegacia mais próxima no meu sistema. Mande exatamente: "BAIRRO, CIDADE"')
+            self.waha.enviar(chat_id, 'Por favor, me informe o seu bairro e a sua cidade para que eu possa localizar a delegacia mais próxima no meu sistema. Mande exatamente: "BAIRRO, CIDADE"')
             
         elif msg_lower == "3":
             texto = (
                 "Para fazer uma denúncia anônima com total sigilo, você pode ligar gratuitamente para o número *181 (Disque Denúncia)*.\n\n"
-                "Se preferir, você também pode digitar os detalhes da denúncia aqui mesmo no chat e eu farei o registro inicial."
+                "Se preferir, você também pode digitar os detalhes da denúncia aqui mesmo no chat e eu farei o registro inicial.\n\n"
+                f"_{self.msg_voltar}_"
             )
+            self.waha.enviar(chat_id, texto)
             sessoes[chat_id]['estado'] = 'menu' 
 
         elif msg_lower == "4":
             texto = (
                 "O acompanhamento do seu Boletim de Ocorrência deve ser feito exclusivamente no site oficial da Polícia Civil de Pernambuco, utilizando o número de protocolo gerado no momento do seu registro.\n\n"
-                "Acesse: https://delegaciapelainternet.pc.pe.gov.br/delegacia/emissaoBo"
+                "Acesse: https://delegaciapelainternet.pc.pe.gov.br/delegacia/emissaoBo\n\n"
+                f"_{self.msg_voltar}_"
             )
+            self.waha.enviar(chat_id, texto)
             sessoes[chat_id]['estado'] = 'menu'
 
         elif msg_lower == "5":
             texto = (
                 "A Lei 7550/77 trata das taxas de fiscalização e licenciamento policial (necessárias para alvarás de eventos, shows, segurança privada, etc.).\n\n"
-                "Para prosseguir, o cidadão deve emitir o DAE (Documento de Arrecadação Estadual) através do portal de serviços da PCPE."
+                "Para prosseguir, o cidadão deve emitir o DAE (Documento de Arrecadação Estadual) através do portal de serviços da PCPE.\n\n"
+                f"_{self.msg_voltar}_"
             )
+            self.waha.enviar(chat_id, texto)
             sessoes[chat_id]['estado'] = 'menu'
 
         elif msg_lower == "6":
             sessoes[chat_id]['estado'] = 'atendimento_humano'
-            self.waha.enviar(chat_id, "Compreendo. Por questões de segurança ou complexidade, estou transferindo o seu atendimento para o plantão policial. Por favor, aguarde um instante na linha.")
-            self.waha.enviar(chat_id, "_(Para cancelar a transferência e voltar ao menu principal, digite \"Menu\")_")
+            texto_humano = (
+                "Compreendo. Por questões de segurança ou complexidade, estou transferindo o seu atendimento para o plantão policial. Por favor, aguarde um instante na linha.\n\n"
+                "_(Para cancelar a transferência e voltar ao menu principal, digite \"Menu\")_"
+            )
+            self.waha.enviar(chat_id, texto_humano)
             
         elif msg_lower in ["voltar", "menu"]:
             self._enviar_menu_principal(chat_id)
@@ -179,7 +189,11 @@ class OrquestradorDeTriagem:
             try:
                 resposta_ia = self.ia.analisar_relato(mensagem)
                 if "[TRANSBORDO]" in resposta_ia:
-                    self.waha.enviar(chat_id, "Compreendo. Por questões de segurança ou complexidade, estou transferindo o seu atendimento para o plantão policial. Por favor, aguarde um instante na linha.\n\n_(Para cancelar a transferência e voltar ao menu principal, digite \"Menu\")_")
+                    texto_transbordo = (
+                        "Compreendo. Por questões de segurança ou complexidade, estou transferindo o seu atendimento para o plantão policial. Por favor, aguarde um instante na linha.\n\n"
+                        "_(Para cancelar a transferência e voltar ao menu principal, digite \"Menu\")_"
+                    )
+                    self.waha.enviar(chat_id, texto_transbordo)
                     sessoes[chat_id]['estado'] = 'atendimento_humano'
                 else:
                     mensagem_final = f"{resposta_ia}\n\n_{self.msg_voltar}_"
